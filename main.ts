@@ -74,7 +74,6 @@ function scaleAxis (raw: number, centre: number) {
     return 0
 }
 function applyGroup (value: number) {
-    let GROUP_MIN = 0
     w = Math.constrain(value, GROUP_MIN, GROUP_MAX)
     if (w != group) {
         group = w
@@ -189,6 +188,7 @@ let mode = 0
 let MODE_GROUP = 0
 let MODE_CHANNEL = 0
 let GROUP_MAX = 0
+let GROUP_MIN = 0
 let CHANNEL_MAX = 0
 let CHANNEL_MIN = 0
 let CAL_ALPHA = 0
@@ -216,6 +216,7 @@ CAL_STEP_MS = 10
 CAL_ALPHA = 0.1
 CHANNEL_MIN = 1
 CHANNEL_MAX = 10
+GROUP_MIN = 0
 GROUP_MAX = 10
 // idle time before the setup menu gives up
 let MENU_TIMEOUT_MS = 3000
@@ -253,9 +254,12 @@ basic.forever(function () {
         radio.sendValue("b", 1)
     } else if (mode == MODE_NORMAL && input.buttonIsPressed(Button.B)) {
         radio.sendValue("b", 2)
+    } else {
+        radio.sendValue("b", 0)
     }
     if (mode != MODE_NORMAL && input.runningTime() - lastInput > MENU_TIMEOUT_MS) {
         mode = MODE_NORMAL
         showNormal()
+        basic.pause(100)
     }
 })
