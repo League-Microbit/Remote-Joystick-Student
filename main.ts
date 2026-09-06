@@ -1,59 +1,68 @@
-/**
- * runningTime() of the last menu interaction
- * 
- * ------------------------------------------------------------- display
- */
-/**
- * --------------------------------------------------------------- radio
- */
-/**
- * ----------------------------------------------------------- axis maths
- */
+
 /**
  * Joystick:bit transmitter for the Nezha diff-drive robot.
  * 
- * Paste this into a MakeCode micro:bit project that has the ELECFREAKS
+ * ============================================================================
+ * CHANNEL & RADIO CONFIGURATION
+ * ============================================================================
+ * Each Micro:bit automatically derives a fixed channel from its machine ID
+ * (serial number modulo 36). Channels are in base-36 ('0'-'9', 'A'-'Z')
+ * and offset by +10 so frequency bands start at 10 (range: 10..45).
  * 
- * `joystickbit` extension added.  Needs a micro:bit **V2** — the setup
+ * Radio group is always: 11
  * 
- * menu is driven by the logo touch sensor, which V1 does not have.
+ * ----------------------------------------------------------------------------
+ * RECEIVER / ROBOT SETUP CODE (Copy into robot program):
+ * ----------------------------------------------------------------------------
+ * Look at the character displayed on this transmitter's screen (e.g. 'A', '3'):
+ * 
+ *   radio.setGroup(11)
+ *   radio.setFrequencyBand(channelFromCode("<DISPLAYED_CHAR>"))
+ * 
+ * Or directly as a one-liner in your robot's on-start block:
+ *   radio.setGroup(11)
+ *   radio.setFrequencyBand(parseInt("<DISPLAYED_CHAR>", 36) + 10)
+ * 
+ * Here is an example program to display all of the data the joystick sends over the radio:
+ *
+ *   radio.onReceivedValue(function (name, value) {
+ *       serial.writeValue(name, value)
+ *   })
+ *   radio.setGroup(11)
+ *   let channel = "J"
+ *   radio.setFrequencyBand(parseInt(channel, 36) + 10)
+ *   basic.forever(function () {
+ *
+ *   })
+ * 
+ * Channel mapping examples:
+ *   '0' -> channel 10  |  '9' -> channel 19
+ *   'A' -> channel 20  |  'B' -> channel 21
+ *   'C' -> channel 22  |  'Z' -> channel 45
+ * ============================================================================
  * 
  * Radio values sent every loop:
- * 
- * x, y    raw rocker readings, 0..1023, exactly as before
- * 
- * cx, cy  centred + dead-zoned axes, -512..+512, 0 when the stick is idle
- * 
- * b       button code, only while a button is held (see below)
- * 
- * Setup menu: tap the logo to cycle NORMAL -> CHANNEL -> GROUP -> NORMAL.
- * 
- * In CHANNEL / GROUP, A steps up and B steps down; the menu drops back to
- * 
- * NORMAL after 3 s with no input, or on the next logo tap.
- * 
- * LED bar display: a value of n lights n LEDs, left to right, wrapping
- * 
- * from row r (values 1..5) onto row r+1 (values 6..10).  Channel lives on
- * 
- * the top two rows, group on the bottom two.  NORMAL shows both at once;
- * 
- * the setup screens show only the bar being edited.
+ *   x, y    raw rocker readings, 0..1023
+ *   cx, cy  centred + dead-zoned axes, -512..+512 (0 when stick is idle)
+ *   b       button code (1: A, 2: B, 3: P12/C, 4: P14/D, 5: P15/E, 6: P13/F, 0: None)
  */
+
+const BASE36 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
 /**
- * ---------------------------------------------------------------- tuning
+ * Convert a base-36 channel character ('0'-'9', 'A'-'Z') back to its frequency band channel number.
+ * Channels start at 10 (e.g. '0' -> 10, '9' -> 19, 'A' -> 20, 'Z' -> 45).
  */
-/**
- * resting rocker readings, measured at boot
- */
+function channelFromCode(code: string): number {
+    let idx = BASE36.indexOf(code.toUpperCase())
+    if (idx < 0) {
+        return 10
+    }
+    return idx + 10
+}
+
+// ----------------------------------------------------------- axis maths
 // Turn one raw rocker reading into a centred, dead-zoned -512..+512 value.
-// 
-// Two stretches, in order:
-// 1. subtract the measured centre, then scale each half of the *raw*
-// travel to full scale independently — the centre is rarely at 512,
-// so the two halves have different spans and need different gains.
-// 2. blank the +/- DEAD_ZONE band around zero, then stretch each
-// remaining tail back out so it still reaches full scale.
 function scaleAxis (raw: number, centre: number) {
     d = raw - centre
     if (d >= 0) {
@@ -73,89 +82,7 @@ function scaleAxis (raw: number, centre: number) {
     }
     return 0
 }
-function applyGroup (value: number) {
-    w = Math.constrain(value, GROUP_MIN, GROUP_MAX)
-    if (w != group) {
-        group = w
-        radio.setGroup(group)
-    }
-    showGroupBar()
-    lastInput = input.runningTime()
-}
-function showGroupBar () {
-    basic.clearScreen()
-    drawBar(group, 3)
-}
-// A / B only edit the menu.  In NORMAL they are left alone so the forever
-// loop can keep reporting them as button codes 1 and 2.
-input.onButtonPressed(Button.A, function () {
-    if (mode == MODE_CHANNEL) {
-        applyChannel(channel - 1)
-    } else if (mode == MODE_GROUP) {
-        applyGroup(group - 1)
-    }
-})
-// Clamp, store and apply a new channel.
-// 
-// setFrequencyBand() and setGroup() are re-asserted together: whether a
-// band change disturbs the group is UNVERIFIED here (it would take a
-// two-board bench check to settle), and re-sending the group costs
-// nothing, so do it rather than depend on the answer.
-function applyChannel (value: number) {
-    v = Math.constrain(value, CHANNEL_MIN, CHANNEL_MAX)
-    if (v != channel) {
-        channel = v
-        radio.setFrequencyBand(channel)
-        radio.setGroup(group)
-    }
-    showChannelBar()
-    lastInput = input.runningTime()
-}
-function showNormal () {
-    basic.clearScreen()
-    drawBar(channel, 0)
-    drawBar(group, 3)
-}
-function showChannelBar () {
-    basic.clearScreen()
-    drawBar(channel, 0)
-}
-input.onButtonPressed(Button.B, function () {
-    if (mode == MODE_CHANNEL) {
-        applyChannel(channel + 1)
-    } else if (mode == MODE_GROUP) {
-        applyGroup(group + 1)
-    }
-})
-// -------------------------------------------------------------- inputs
-input.onLogoEvent(TouchButtonEvent.Pressed, function () {
-    if (mode == MODE_NORMAL) {
-        mode = MODE_CHANNEL
-        basic.showString("C")
-        showChannelBar()
-    } else if (mode == MODE_CHANNEL) {
-        mode = MODE_GROUP
-        basic.showString("G")
-        showGroupBar()
-    } else {
-        mode = MODE_NORMAL
-        showNormal()
-    }
-    lastInput = input.runningTime()
-})
-// Light `value` LEDs across two rows, starting at `topRow`.
-// Values 1..5 fill topRow left-to-right, 6..10 wrap onto topRow + 1.
-function drawBar (value: number, topRow: number) {
-    for (let i = 0; i <= 9; i++) {
-        col = i % 5
-        row = topRow + Math.idiv(i, 5)
-        if (i < value) {
-            led.plot(col, row)
-        } else {
-            led.unplot(col, row)
-        }
-    }
-}
+
 // Average the resting rocker readings for CAL_MS into centreX / centreY.
 // The stick must be untouched while the centre LED is lit.
 function calibrateCentre () {
@@ -170,70 +97,46 @@ function calibrateCentre () {
     }
     basic.clearScreen()
 }
+
+// ---------------------------------------------------------------- state
 let rawY = 0
 let rawX = 0
 let elapsed = 0
 let centreY = 0
 let centreX = 0
-let row = 0
-let col = 0
-let v = 0
-let lastInput = 0
-let w = 0
 let s = 0
 let span = 0
 let d = 0
-let MODE_NORMAL = 0
-let mode = 0
-let MODE_GROUP = 0
-let MODE_CHANNEL = 0
-let GROUP_MAX = 0
-let GROUP_MIN = 0
-let CHANNEL_MAX = 0
-let CHANNEL_MIN = 0
-let CAL_ALPHA = 0
-let CAL_STEP_MS = 0
-let CAL_MS = 0
-let DEAD_ZONE = 0
-let OUT_MAX = 0
-let RAW_MAX = 0
-let group = 0
-let channel = 0
-// ---------------------------------------------------------------- state
-channel = 1
-group = 1
+
 // micro:bit analog read full scale
-RAW_MAX = 1023
+let RAW_MAX = 1023
 // cx / cy full scale
-OUT_MAX = 512
+let OUT_MAX = 512
 // cx / cy counts treated as "stick not touched"
-DEAD_ZONE = 7
-// how long to average the resting stick
-CAL_MS = 1000
-// sample period during calibration
-CAL_STEP_MS = 10
+let DEAD_ZONE = 7
+// how long to average the resting stick (ms)
+let CAL_MS = 1000
+// sample period during calibration (ms)
+let CAL_STEP_MS = 10
 // EMA weight of each new sample
-CAL_ALPHA = 0.1
-CHANNEL_MIN = 1
-CHANNEL_MAX = 10
-GROUP_MIN = 0
-GROUP_MAX = 10
-// idle time before the setup menu gives up
-let MENU_TIMEOUT_MS = 3000
-MODE_CHANNEL = 1
-MODE_GROUP = 2
-mode = MODE_NORMAL
+let CAL_ALPHA = 0.1
+
+// Group is always 11
+let group = 11
+
+// Derive fixed base-36 channel from machine serial number (0..35 -> channel 10..45)
+let deviceId = control.deviceSerialNumber()
+let channelIndex = ((deviceId % 36) + 36) % 36
+let channelCode = BASE36.charAt(channelIndex)
+let channel = channelIndex + 10
+
 // ------------------------------------------------------------- on start
-basic.showIcon(IconNames.Sword)
-basic.showNumber(channel)
-basic.showIcon(IconNames.Sword)
-basic.showNumber(group)
-basic.showIcon(IconNames.Sword)
 joystickbit.initJoystickBit()
-radio.setFrequencyBand(channel)
 radio.setGroup(group)
+radio.setFrequencyBand(channel)
 calibrateCentre()
-showNormal()
+basic.showString(channelCode)
+
 // ---------------------------------------------------------------- loop
 basic.forever(function () {
     rawX = joystickbit.getRockerValue(joystickbit.rockerType.X)
@@ -250,16 +153,12 @@ basic.forever(function () {
         radio.sendValue("b", 5)
     } else if (joystickbit.getButton(joystickbit.JoystickBitPin.P13)) {
         radio.sendValue("b", 6)
-    } else if (mode == MODE_NORMAL && input.buttonIsPressed(Button.A)) {
+    } else if (input.buttonIsPressed(Button.A)) {
         radio.sendValue("b", 1)
-    } else if (mode == MODE_NORMAL && input.buttonIsPressed(Button.B)) {
+    } else if (input.buttonIsPressed(Button.B)) {
         radio.sendValue("b", 2)
     } else {
         radio.sendValue("b", 0)
     }
-    if (mode != MODE_NORMAL && input.runningTime() - lastInput > MENU_TIMEOUT_MS) {
-        mode = MODE_NORMAL
-        showNormal()
-        basic.pause(100)
-    }
 })
+
