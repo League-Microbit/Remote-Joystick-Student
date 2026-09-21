@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""dotconfig version_bump hook — mirror the new version into the MakeCode manifests.
+
+Invoked by dotconfig as:
+
+    config/hooks/version_bump <project_dir> <old_version> <new_version>
+
+`config/dotconfig.yaml` stays the version of record; this hook copies the
+bumped value into pxt.json and package.json so the MakeCode extension and the
+npm manifest report the same version.  Edits are done with a targeted regex
+rather than a json round-trip so each file keeps its own indentation and key
+order.
+"""
+
+import re
+import sys
+from pathlib import Path
+
+TARGETS = ("pxt.json", "package.json")
+
+VERSION_RE = re.compile(r'("version"\s*:\s*)"[^"]*"')
+
+
+def _indent_of(text: str) -> str:
+    """Guess the file's indent from its first indented line."""
+    for line in text.splitlines()[1:]:
+        stripped = line.lstrip(" \t")
+        if stripped.startswith('"'):
+            return line[: len(line) - len(stripped)]
+    return "    "
+
+
+def update(path: Path, version: str) -> str:
+    text = path.read_text()
+
+    new_text, count = VERSION_RE.subn(rf'\g<1>"{version}"', text, count=1)
+    if count:
+        if new_text == text:
+            return "unchanged"
+    else:
+        # No version key yet — insert one right after the opening brace.
+        brace = text.index("{")
+        indent = _indent_of(text)
+        new_text = (
+            text[: brace + 1]
+            + f'\n{indent}"version": "{version}",'
+            + text[brace + 1 :]
+        )
+
+    path.write_text(new_text)
+    return "updated"
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 4:
+        print("version_bump: expected <project_dir> <old_version> <new_version>",
+              file=sys.stderr)
+        return 2
+
+    project_dir = Path(argv[1])
+    new_version = argv[3]
+
+    for name in TARGETS:
+        path = project_dir / name
+        if not path.exists():
+            continue
+        try:
+            status = update(path, new_version)
+        except (OSError, ValueError) as e:
+            print(f"version_bump: {name}: {e}", file=sys.stderr)
+            return 1
+        print(f"version_bump: {name} {status} -> {new_version}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

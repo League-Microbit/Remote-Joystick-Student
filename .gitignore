@@ -10,3 +10,7 @@ _site
 *.tgz
 .header.json
 .simstate.json
+# dotconfig — assembled env files contain decrypted secrets
+.env
+.env.*
+!.env.example

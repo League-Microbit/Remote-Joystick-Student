@@ -1,0 +1,172 @@
+# Build the joystick transmitter firmware and publish the .hex as a GitHub
+# Release on every push to master, so a student can flash it without
+# installing MakeCode or any local toolchain.
+#
+# VERSION comes from config/dotconfig.yaml, which is the source of truth
+# dotconfig maintains. Bump it locally before pushing:
+#
+#     dotconfig version bump          # writes config/dotconfig.yaml
+#     dotconfig version bump --push   # ...and commits, tags, pushes
+#
+# CI never bumps the version itself -- a workflow that writes back to its
+# own branch would retrigger itself. It only reads what is committed.
+#
+# If the version was NOT bumped since the last push, the release for that
+# version already exists and the hex is replaced in place (--clobber)
+# rather than failing the run. So every check-in publishes a hex; whether
+# it lands on a new release or updates the current one is decided by
+# whether you bumped.
+#
+# V2 ONLY. The project depends on `microphone`, which exists only on the
+# micro:bit V2, so PXT_COMPILE_SWITCHES selects the mbcodal (V2) variant.
+# There is deliberately no V1 (mbdal) build to fall back on.
+name: Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# gh release create/upload needs write access to the repo's contents.
+permissions:
+  contents: write
+
+# Two runs racing would both try to create the same v<version> release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # PXT_NODOCKER below means codal is compiled on the runner itself,
+      # so the cross compiler has to be present.
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-arm-none-eabi
+
+      # npm install, not npm ci: the config/hooks/version_bump hook mirrors
+      # each bumped version into package.json, which leaves package-lock.json
+      # reporting the previous one. npm install tolerates that drift; npm ci
+      # is strict about it and would fail on exactly the commits we most want
+      # to build.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Set up PXT
+        run: |
+          npx pxt target microbit
+          npx pxt install
+
+      - name: Read version
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version:[[:space:]]*//p' config/dotconfig.yaml | head -1 | tr -d '"'\''' | tr -d '[:space:]')"
+          if [ -z "$VERSION" ]; then
+              echo "::error::no version found in config/dotconfig.yaml -- run 'dotconfig version bump' and commit it"
+              exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "hex=remote-joystick-student-$VERSION.hex" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION"
+
+          # config/dotconfig.yaml is the version of record; the version_bump
+          # hook mirrors it into pxt.json. If someone bumped without the hook,
+          # or hand-edited pxt.json, the hex's MakeCode manifest would report a
+          # different version than the release it ships in -- say so loudly
+          # rather than shipping mismatched provenance silently.
+          PXT_VERSION="$(node -p 'require("./pxt.json").version || ""')"
+          if [ -n "$PXT_VERSION" ] && [ "$PXT_VERSION" != "$VERSION" ]; then
+              echo "::warning::pxt.json says $PXT_VERSION but config/dotconfig.yaml says $VERSION; releasing as $VERSION"
+          fi
+
+      - name: Build
+        env:
+          PXT_FORCE_LOCAL: "1"
+          PXT_COMPILE_SWITCHES: csv---mbcodal
+          PXT_NODOCKER: "1"
+        run: npx pxt build
+
+      - name: Verify hex output
+        run: test -f built/binary.hex && echo "built/binary.hex exists ($(wc -c < built/binary.hex) bytes)"
+
+      # The same image under two names: the versioned one is self-describing
+      # once it is sitting in ~/Downloads next to five other .hex files, and
+      # the bare one gives a stable URL that always resolves to the newest
+      # build:
+      #   .../releases/latest/download/remote-joystick-student.hex
+      - name: Package the hex
+        env:
+          HEX: ${{ steps.version.outputs.hex }}
+        run: |
+          set -euo pipefail
+          cp built/binary.hex "$HEX"
+          cp built/binary.hex remote-joystick-student.hex
+          sha256sum "$HEX" | cut -d' ' -f1 > "$HEX.sha256"
+          cat "$HEX.sha256"
+
+      # Uploaded before the release step, so a failed release still leaves
+      # something downloadable from the run page.
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.tag }}
+          path: |
+            ${{ steps.version.outputs.hex }}
+            remote-joystick-student.hex
+          if-no-files-found: error
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          HEX: ${{ steps.version.outputs.hex }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG exists -- replacing its hex (version was not bumped)."
+              gh release upload "$TAG" "$HEX" remote-joystick-student.hex --clobber
+              exit 0
+          fi
+          {
+              echo "Joystick:bit **transmitter** firmware for the Nezha diff-drive robot."
+              echo "micro:bit **V2 only** — this program uses the V2 microphone."
+              echo
+              echo "To flash: download \`$HEX\`, plug the micro:bit in over USB, and"
+              echo "drag the file onto the \`MICROBIT\` drive."
+              echo
+              echo "The transmitter shows a single character on its screen — that is its"
+              echo "radio channel. Set the receiving robot to match:"
+              echo
+              echo '```'
+              echo "radio.setGroup(11)"
+              echo 'radio.setFrequencyBand(parseInt("<DISPLAYED_CHAR>", 36) + 10)'
+              echo '```'
+              echo
+              echo "| | |"
+              echo "|---|---|"
+              echo "| Version | \`${TAG#v}\` |"
+              echo "| Commit | \`$GITHUB_SHA\` |"
+              echo "| sha256 | \`$(cat "$HEX.sha256")\` |"
+              echo "| Built | $(date -u '+%Y-%m-%d %H:%M UTC') |"
+              echo
+              echo "\`remote-joystick-student.hex\` is the same image under a fixed name, so"
+              echo "the newest build is always at \`releases/latest/download/remote-joystick-student.hex\`."
+          } > notes.md
+
+          gh release create "$TAG" "$HEX" remote-joystick-student.hex \
+              --title "$TAG" \
+              --notes-file notes.md \
+              --target "$GITHUB_SHA"

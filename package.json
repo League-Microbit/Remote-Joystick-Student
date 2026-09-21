@@ -1,4 +1,5 @@
 {
+  "version": "0.20260921.3",
   "dependencies": {
     "pxt-microbit": "^9.1.1"
   }
