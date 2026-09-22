@@ -102,20 +102,43 @@ jobs:
       - name: Verify hex output
         run: test -f built/binary.hex && echo "built/binary.hex exists ($(wc -c < built/binary.hex) bytes)"
 
-      # The same image under two names: the versioned one is self-describing
-      # once it is sitting in ~/Downloads next to five other .hex files, and
-      # the bare one gives a stable URL that always resolves to the newest
-      # build:
-      #   .../releases/latest/download/remote-joystick-student.hex
+      # Every release carries the SAME image under two names, plus a
+      # manifest. Do not drop either name:
+      #
+      #   remote-joystick-student-<v>.hex  what the release notes tell a
+      #                                    student to download -- self-
+      #                                    describing once it is sitting in
+      #                                    ~/Downloads next to five other
+      #                                    .hex files.
+      #   MICROBIT.hex                     the FIXED name robot-console
+      #                                    resolves by (its releases.ts,
+      #                                    HEX_ASSET_NAME), matched
+      #                                    case-insensitively.
+      #   MICROBIT.hex.txt                 that host's sha256 manifest. It
+      #                                    verifies the download against
+      #                                    this digest and REFUSES the
+      #                                    release if the pair is missing:
+      #                                    'expected "MICROBIT.hex" and
+      #                                    "MICROBIT.hex.txt"'.
+      #
+      # The manifest is read with a lenient regex, sha[-_]?256 then : or =
+      # then exactly 64 lowercase hex chars, so the `sha256: ` line below
+      # is what matters; the rest is for humans.
       - name: Package the hex
         env:
           HEX: ${{ steps.version.outputs.hex }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           cp built/binary.hex "$HEX"
-          cp built/binary.hex remote-joystick-student.hex
-          sha256sum "$HEX" | cut -d' ' -f1 > "$HEX.sha256"
-          cat "$HEX.sha256"
+          cp built/binary.hex MICROBIT.hex
+          {
+              echo "version: $VERSION"
+              echo "commit: $GITHUB_SHA"
+              echo "built:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              echo "sha256: $(sha256sum MICROBIT.hex | cut -d' ' -f1)"
+          } > MICROBIT.hex.txt
+          cat MICROBIT.hex.txt
 
       # Uploaded before the release step, so a failed release still leaves
       # something downloadable from the run page.
@@ -125,7 +148,8 @@ jobs:
           name: ${{ steps.version.outputs.tag }}
           path: |
             ${{ steps.version.outputs.hex }}
-            remote-joystick-student.hex
+            MICROBIT.hex
+            MICROBIT.hex.txt
           if-no-files-found: error
 
       - name: Publish release
@@ -137,7 +161,7 @@ jobs:
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
               echo "Release $TAG exists -- replacing its hex (version was not bumped)."
-              gh release upload "$TAG" "$HEX" remote-joystick-student.hex --clobber
+              gh release upload "$TAG" "$HEX" MICROBIT.hex MICROBIT.hex.txt --clobber
               exit 0
           fi
           {
@@ -159,14 +183,15 @@ jobs:
               echo "|---|---|"
               echo "| Version | \`${TAG#v}\` |"
               echo "| Commit | \`$GITHUB_SHA\` |"
-              echo "| sha256 | \`$(cat "$HEX.sha256")\` |"
+              echo "| sha256 | \`$(sha256sum MICROBIT.hex | cut -d' ' -f1)\` |"
               echo "| Built | $(date -u '+%Y-%m-%d %H:%M UTC') |"
               echo
-              echo "\`remote-joystick-student.hex\` is the same image under a fixed name, so"
-              echo "the newest build is always at \`releases/latest/download/remote-joystick-student.hex\`."
+              echo "\`MICROBIT.hex\` is the same image under the fixed name the robot"
+              echo "console fetches by, and \`MICROBIT.hex.txt\` is its sha256 manifest."
+              echo "Flashing by hand? Take \`$HEX\`."
           } > notes.md
 
-          gh release create "$TAG" "$HEX" remote-joystick-student.hex \
+          gh release create "$TAG" "$HEX" MICROBIT.hex MICROBIT.hex.txt \
               --title "$TAG" \
               --notes-file notes.md \
               --target "$GITHUB_SHA"

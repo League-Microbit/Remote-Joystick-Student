@@ -1,5 +1,5 @@
 {
-    "version": "0.20260921.3",
+    "version": "0.20260922.1",
     "name": "EFJS",
     "description": "",
     "dependencies": {
@@ -10,6 +10,7 @@
     },
     "files": [
         "main.blocks",
+        "announce.ts",
         "main.ts",
         "README.md"
     ],
